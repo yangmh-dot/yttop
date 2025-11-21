@@ -110,7 +110,7 @@
     <div class="card">
       <div class="small-note" style="margin-bottom:8px;">
         步驟：<br>
-        1. 先在 Google Cloud 建立 YouTube Data API v3 的 API Key。<br>
+        1. 在 Google Cloud 建立 YouTube Data API v3 的 API Key。<br>
         2. 填入下面的 API Key（只會在你自己的瀏覽器使用）。<br>
         3. 可自訂條件搜尋，或使用「本週 Shorts Top 50」快捷鍵。<br>
         4. 關鍵字可以留空，只用地區 + 類別 + 時間來抓熱門影片。
@@ -119,11 +119,10 @@
       <label for="apiKey">YouTube API Key</label>
       <input id="apiKey" type="password" placeholder="請貼上你的 API Key" />
 
-      <!-- 這裡改成「可留空」 -->
       <label for="query">關鍵字 / 類型（可留空，支援中英文，例如：minecraft shorts, 貓咪 shorts）</label>
       <input id="query" type="text" value="" />
 
-      <!-- 地區 + 類別選項 -->
+      <!-- 地區 + 類別 -->
       <div class="two-cols">
         <div>
           <label for="region">地區（Region）</label>
@@ -245,7 +244,7 @@
       localStorage.setItem("yt_api_key", apiKeyInput.value.trim());
     });
 
-    // 切換「自訂秒數」輸入欄位顯示/隱藏
+    // 切換「自訂秒數」欄位顯示/隱藏
     lengthModeSelect.addEventListener("change", () => {
       if (lengthModeSelect.value === "custom") {
         customSecondsWrapper.style.display = "block";
@@ -254,7 +253,7 @@
       }
     });
 
-    // 工具：把 Date 轉成 yyyy-mm-dd 給 <input type="date">
+    // Date 轉 yyyy-mm-dd，給 <input type="date">
     function toDateInputValue(d) {
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, "0");
@@ -262,10 +261,10 @@
       return `${year}-${month}-${day}`;
     }
 
-    // 一般「依上方條件搜尋」按鈕
+    // 一般搜尋按鈕
     searchBtn.addEventListener("click", async () => {
       const apiKey = apiKeyInput.value.trim();
-      const query = queryInput.value.trim();  // 可為空字串
+      const query = queryInput.value.trim();  // 可為空
       const startDate = startDateInput.value;
       const endDate = endDateInput.value;
       const limit = parseInt(limitInput.value, 10) || 10;
@@ -316,10 +315,9 @@
       }
     });
 
-    // 「本週 Shorts Top 50」快捷按鈕（關鍵字可以留空）
+    // 本週 Shorts Top 50 快捷鍵（關鍵字可空）
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
-      const query = queryInput.value.trim(); // 可為空
 
       if (!apiKey) {
         alert("請先填入 YouTube API Key");
@@ -333,24 +331,24 @@
       const startDate = toDateInputValue(weekAgo);
       const endDate = toDateInputValue(today);
 
-      // 更新畫面上的日期 & 條件，讓你看得到設定
+      // 更新畫面上的日期 & 條件
       startDateInput.value = startDate;
       endDateInput.value = endDate;
 
       limitInput.value = 50;                 // Top 50
       lengthModeSelect.value = "shorts";     // 只抓短影片
-      lengthModeSelect.dispatchEvent(new Event("change")); // 更新 UI 顯示
+      lengthModeSelect.dispatchEvent(new Event("change"));
 
       statusDiv.textContent = `搜尋中：本週（${startDate} ~ ${endDate}）Shorts Top 50…`;
       resultsDiv.innerHTML = "";
 
-      // 直接呼叫一般搜尋邏輯
       searchBtn.click();
     });
 
     /**
-     * 呼叫 YouTube API 找出指定條件的熱門影片
-     * options = { apiKey, query, startDate, endDate, limit, lengthMode, maxSeconds, regionCode, categoryId }
+     * 主邏輯：
+     * - 若 query 為空：改用 videos.list?chart=mostPopular 抓某地區 / 類別熱門影片，再用日期 + 長度過濾
+     * - 若 query 有值：用 search.list 依關鍵字 + 日期 + 地區 + 類別搜尋
      */
     async function searchTopVideos(options) {
       const {
@@ -368,38 +366,97 @@
       const searchBase = "https://www.googleapis.com/youtube/v3/search";
       const videosBase = "https://www.googleapis.com/youtube/v3/videos";
 
-      // 把日期轉成 ISO 8601（UTC）
-      const publishedAfter = new Date(startDate + "T00:00:00Z").toISOString();
-      const publishedBefore = new Date(endDate + "T23:59:59Z").toISOString();
+      // 日期轉物件與 ISO 字串
+      const publishedAfterDate = new Date(startDate + "T00:00:00Z");
+      const publishedBeforeDate = new Date(endDate + "T23:59:59Z");
+      const publishedAfter = publishedAfterDate.toISOString();
+      const publishedBefore = publishedBeforeDate.toISOString();
 
+      // ========= 情況一：關鍵字為空 → 用 videos.list 熱門影片 =========
+      if (!query || query.length === 0) {
+        const videosParams = new URLSearchParams({
+          key: apiKey,
+          part: "snippet,statistics,contentDetails",
+          chart: "mostPopular",
+          maxResults: "50"
+        });
+
+        if (regionCode) {
+          videosParams.set("regionCode", regionCode);
+        }
+        if (categoryId) {
+          videosParams.set("videoCategoryId", categoryId);
+        }
+
+        const videosUrl = `${videosBase}?${videosParams.toString()}`;
+        const videosRes = await fetch(videosUrl);
+        const videosJson = await videosRes.json();
+
+        if (!videosRes.ok) {
+          throw new Error(videosJson.error?.message || "YouTube videos API 錯誤（mostPopular）");
+        }
+
+        let videoData = (videosJson.items || []).map((item) => {
+          const stats = item.statistics || {};
+          const snippet = item.snippet || {};
+          const contentDetails = item.contentDetails || {};
+          const durationISO = contentDetails.duration || null;
+          const durationSeconds = durationISO ? parseISODurationToSeconds(durationISO) : null;
+          const viewCount = Number(stats.viewCount || 0);
+
+          return {
+            id: item.id,
+            title: snippet.title || "(無標題)",
+            channel: snippet.channelTitle || "",
+            publishedAt: snippet.publishedAt || "",
+            views: viewCount,
+            durationSeconds,
+            url: `https://www.youtube.com/watch?v=${item.id}`
+          };
+        });
+
+        // 用日期區間過濾
+        videoData = videoData.filter((v) => {
+          if (!v.publishedAt) return false;
+          const d = new Date(v.publishedAt);
+          return d >= publishedAfterDate && d <= publishedBeforeDate;
+        });
+
+        // 長度條件
+        if (lengthMode === "shorts") {
+          videoData = videoData.filter(
+            (v) => v.durationSeconds != null && v.durationSeconds <= 60
+          );
+        } else if (lengthMode === "custom" && maxSeconds != null) {
+          videoData = videoData.filter(
+            (v) => v.durationSeconds != null && v.durationSeconds <= maxSeconds
+          );
+        }
+
+        videoData.sort((a, b) => b.views - a.views);
+        return videoData.slice(0, limit);
+      }
+
+      // ========= 情況二：有關鍵字 → 用 search.list =========
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
         type: "video",
-        maxResults: "50",      // 一次最多 50
-        order: "viewCount",    // 依觀看數排序
+        maxResults: "50",
+        order: "viewCount",
         publishedAfter,
-        publishedBefore
+        publishedBefore,
+        q: query
       });
 
-      // 關鍵字可留空，如果有才帶 q
-      if (query && query.length > 0) {
-        params.set("q", query);
-      }
-
-      // 地區條件
       if (regionCode) {
         params.set("regionCode", regionCode);
       }
-
-      // 類別條件（YouTube 影片類別 ID）
       if (categoryId) {
         params.set("videoCategoryId", categoryId);
       }
-
-      // 如果是「只要短影片」，先用官方的 short 篩一次，減少後端資料量
       if (lengthMode === "shorts") {
-        params.set("videoDuration", "short"); // 官方定義短影片
+        params.set("videoDuration", "short");
       }
 
       const searchUrl = `${searchBase}?${params.toString()}`;
@@ -417,22 +474,21 @@
 
       if (!videoIds.length) return [];
 
-      // 用 videos.list 一次撈所有 videoId 的詳細資訊（包含 duration）
-      const videosParams = new URLSearchParams({
+      const videosParams2 = new URLSearchParams({
         key: apiKey,
         part: "snippet,statistics,contentDetails",
         id: videoIds.join(",")
       });
 
-      const videosUrl = `${videosBase}?${videosParams.toString()}`;
-      const videosRes = await fetch(videosUrl);
-      const videosJson = await videosRes.json();
+      const videosUrl2 = `${videosBase}?${videosParams2.toString()}`;
+      const videosRes2 = await fetch(videosUrl2);
+      const videosJson2 = await videosRes2.json();
 
-      if (!videosRes.ok) {
-        throw new Error(videosJson.error?.message || "YouTube videos API 錯誤");
+      if (!videosRes2.ok) {
+        throw new Error(videosJson2.error?.message || "YouTube videos API 錯誤");
       }
 
-      let videoData = (videosJson.items || []).map((item) => {
+      let videoData = (videosJson2.items || []).map((item) => {
         const stats = item.statistics || {};
         const snippet = item.snippet || {};
         const contentDetails = item.contentDetails || {};
@@ -451,9 +507,8 @@
         };
       });
 
-      // 前端再做一次「長度條件」篩選
+      // 長度條件（再次保險）
       if (lengthMode === "shorts") {
-        // 安全起見，再用 <= 60 秒確認一次
         videoData = videoData.filter(
           (v) => v.durationSeconds != null && v.durationSeconds <= 60
         );
@@ -463,7 +518,6 @@
         );
       }
 
-      // 依觀看數排序，取前 N 名
       videoData.sort((a, b) => b.views - a.views);
       return videoData.slice(0, limit);
     }
@@ -504,7 +558,7 @@
       });
     }
 
-    // 解析 ISO 8601 duration（例如 PT1M23S）成秒數
+    // 解析 ISO 8601 duration 成秒數（PT1M23S 等）
     function parseISODurationToSeconds(iso) {
       const regex = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/;
       const match = iso.match(regex);
