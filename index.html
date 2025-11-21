@@ -232,19 +232,15 @@
     const statusDiv = document.getElementById("status");
     const resultsDiv = document.getElementById("results");
 
-    // 載入 localStorage 裡的 API Key
     (function loadApiKeyFromStorage() {
       const savedKey = localStorage.getItem("yt_api_key");
-      if (savedKey) {
-        apiKeyInput.value = savedKey;
-      }
+      if (savedKey) apiKeyInput.value = savedKey;
     })();
 
     apiKeyInput.addEventListener("change", () => {
       localStorage.setItem("yt_api_key", apiKeyInput.value.trim());
     });
 
-    // 切換「自訂秒數」欄位顯示/隱藏
     lengthModeSelect.addEventListener("change", () => {
       if (lengthModeSelect.value === "custom") {
         customSecondsWrapper.style.display = "block";
@@ -253,7 +249,6 @@
       }
     });
 
-    // Date 轉 yyyy-mm-dd，給 <input type="date">
     function toDateInputValue(d) {
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, "0");
@@ -261,10 +256,9 @@
       return `${year}-${month}-${day}`;
     }
 
-    // 一般搜尋按鈕
     searchBtn.addEventListener("click", async () => {
       const apiKey = apiKeyInput.value.trim();
-      const query = queryInput.value.trim();  // 可為空
+      const query = queryInput.value.trim();
       const startDate = startDateInput.value;
       const endDate = endDateInput.value;
       const limit = parseInt(limitInput.value, 10) || 10;
@@ -315,10 +309,8 @@
       }
     });
 
-    // 本週 Shorts Top 50 快捷鍵（關鍵字可空）
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
-
       if (!apiKey) {
         alert("請先填入 YouTube API Key");
         return;
@@ -326,17 +318,16 @@
 
       const today = new Date();
       const weekAgo = new Date();
-      weekAgo.setDate(today.getDate() - 6); // 今天 + 往前 6 天 = 7 天區間
+      weekAgo.setDate(today.getDate() - 6);
 
       const startDate = toDateInputValue(weekAgo);
       const endDate = toDateInputValue(today);
 
-      // 更新畫面上的日期 & 條件
       startDateInput.value = startDate;
       endDateInput.value = endDate;
 
-      limitInput.value = 50;                 // Top 50
-      lengthModeSelect.value = "shorts";     // 只抓短影片
+      limitInput.value = 50;
+      lengthModeSelect.value = "shorts";
       lengthModeSelect.dispatchEvent(new Event("change"));
 
       statusDiv.textContent = `搜尋中：本週（${startDate} ~ ${endDate}）Shorts Top 50…`;
@@ -345,11 +336,6 @@
       searchBtn.click();
     });
 
-    /**
-     * 主邏輯：
-     * - 若 query 為空：改用 videos.list?chart=mostPopular 抓某地區 / 類別熱門影片，再用日期 + 長度過濾
-     * - 若 query 有值：用 search.list 依關鍵字 + 日期 + 地區 + 類別搜尋
-     */
     async function searchTopVideos(options) {
       const {
         apiKey,
@@ -366,37 +352,50 @@
       const searchBase = "https://www.googleapis.com/youtube/v3/search";
       const videosBase = "https://www.googleapis.com/youtube/v3/videos";
 
-      // 日期轉物件與 ISO 字串
       const publishedAfterDate = new Date(startDate + "T00:00:00Z");
       const publishedBeforeDate = new Date(endDate + "T23:59:59Z");
       const publishedAfter = publishedAfterDate.toISOString();
       const publishedBefore = publishedBeforeDate.toISOString();
 
-      // ========= 情況一：關鍵字為空 → 用 videos.list 熱門影片 =========
+      // ========== 情況一：關鍵字為空 → videos.list + 多頁 mostPopular ==========
       if (!query || query.length === 0) {
-        const videosParams = new URLSearchParams({
-          key: apiKey,
-          part: "snippet,statistics,contentDetails",
-          chart: "mostPopular",
-          maxResults: "50"
-        });
+        const maxPages = 3;      // 最多抓 3 頁
+        const perPage = 50;      // 每頁 50
+        let pageToken = null;
+        let pageCount = 0;
+        let allItems = [];
 
-        if (regionCode) {
-          videosParams.set("regionCode", regionCode);
+        while (pageCount < maxPages) {
+          const videosParams = new URLSearchParams({
+            key: apiKey,
+            part: "snippet,statistics,contentDetails",
+            chart: "mostPopular",
+            maxResults: String(perPage)
+          });
+
+          if (regionCode) videosParams.set("regionCode", regionCode);
+          if (categoryId) videosParams.set("videoCategoryId", categoryId);
+          if (pageToken) videosParams.set("pageToken", pageToken);
+
+          const videosUrl = `${videosBase}?${videosParams.toString()}`;
+          const videosRes = await fetch(videosUrl);
+          const videosJson = await videosRes.json();
+
+          if (!videosRes.ok) {
+            throw new Error(videosJson.error?.message || "YouTube videos API 錯誤（mostPopular）");
+          }
+
+          const items = videosJson.items || [];
+          allItems = allItems.concat(items);
+
+          pageToken = videosJson.nextPageToken || null;
+          pageCount += 1;
+
+          if (!pageToken) break;           // 沒下一頁就停
+          if (allItems.length >= 200) break; // 安全上限
         }
-        if (categoryId) {
-          videosParams.set("videoCategoryId", categoryId);
-        }
 
-        const videosUrl = `${videosBase}?${videosParams.toString()}`;
-        const videosRes = await fetch(videosUrl);
-        const videosJson = await videosRes.json();
-
-        if (!videosRes.ok) {
-          throw new Error(videosJson.error?.message || "YouTube videos API 錯誤（mostPopular）");
-        }
-
-        let videoData = (videosJson.items || []).map((item) => {
+        let videoData = allItems.map((item) => {
           const stats = item.statistics || {};
           const snippet = item.snippet || {};
           const contentDetails = item.contentDetails || {};
@@ -415,7 +414,7 @@
           };
         });
 
-        // 用日期區間過濾
+        // 日期區間過濾
         videoData = videoData.filter((v) => {
           if (!v.publishedAt) return false;
           const d = new Date(v.publishedAt);
@@ -437,7 +436,7 @@
         return videoData.slice(0, limit);
       }
 
-      // ========= 情況二：有關鍵字 → 用 search.list =========
+      // ========== 情況二：有關鍵字 → search.list ==========
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
@@ -449,15 +448,9 @@
         q: query
       });
 
-      if (regionCode) {
-        params.set("regionCode", regionCode);
-      }
-      if (categoryId) {
-        params.set("videoCategoryId", categoryId);
-      }
-      if (lengthMode === "shorts") {
-        params.set("videoDuration", "short");
-      }
+      if (regionCode) params.set("regionCode", regionCode);
+      if (categoryId) params.set("videoCategoryId", categoryId);
+      if (lengthMode === "shorts") params.set("videoDuration", "short");
 
       const searchUrl = `${searchBase}?${params.toString()}`;
       const searchRes = await fetch(searchUrl);
@@ -507,7 +500,6 @@
         };
       });
 
-      // 長度條件（再次保險）
       if (lengthMode === "shorts") {
         videoData = videoData.filter(
           (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -558,7 +550,6 @@
       });
     }
 
-    // 解析 ISO 8601 duration 成秒數（PT1M23S 等）
     function parseISODurationToSeconds(iso) {
       const regex = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/;
       const match = iso.match(regex);
