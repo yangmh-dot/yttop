@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <title>YouTube 熱門影片抓取工具（指定時間 + 類型）</title>
+  <title>YouTube 熱門短片抓取工具</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
@@ -84,6 +84,17 @@
       color: #9ca3af;
       line-height: 1.4;
     }
+    .mode-label {
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .mode-label input[type="checkbox"] {
+      width: auto;
+      margin-bottom: 0;
+    }
     @media (min-width: 640px) {
       .two-cols {
         display: flex;
@@ -105,23 +116,27 @@
 </head>
 <body>
   <main>
-    <h1>YouTube 熱門影片抓取工具（類型 + 時間 + 播放數排行）</h1>
+    <h1>YouTube 熱門短片抓取工具</h1>
 
     <div class="card">
       <div class="small-note" style="margin-bottom:8px;">
-        步驟：<br>
-        1. 在 Google Cloud 建立 YouTube Data API v3 的 API Key。<br>
-        2. 填入下面的 API Key（只會在你自己的瀏覽器使用）。<br>
-        3. 可自訂條件搜尋，或使用「本週 Shorts Top 50」快捷鍵。<br>
-        4. 關鍵字可以留空，此時會以 YouTube 熱門影片榜（mostPopular）為主，<br>
-           日期只做顯示用，不參與篩選。
+        用途說明：<br>
+        ・「熱門榜模式」：以 YouTube 熱門榜（mostPopular）為基礎，<b>模仿目前這一刻爆量的短片</b>。<br>
+        ・「關鍵字 + 時間模式」：指定日期區間 + 關鍵字，分析某段時間內播放數最高的影片。<br>
+        ・關鍵字留空且使用熱門榜模式時，會自動用「貓 / 狗」相關詞去抓貓狗影片。
       </div>
 
       <label for="apiKey">YouTube API Key</label>
       <input id="apiKey" type="password" placeholder="請貼上你的 API Key" />
 
-      <label for="query">關鍵字 / 類型（可留空，支援中英文，例如：minecraft shorts, 貓咪 shorts）</label>
+      <label for="query">關鍵字 / 類型（可留空；熱門榜模式時留空＝抓「貓狗」主題）</label>
       <input id="query" type="text" value="" />
+
+      <!-- 模式切換 -->
+      <label class="mode-label">
+        <input id="useTrendingMode" type="checkbox" checked />
+        使用熱門榜模式（mostPopular）模仿目前爆量影片（會忽略日期，只用地區 / 類別 / 長度 + 關鍵字做篩選）
+      </label>
 
       <!-- 地區 + 類別 -->
       <div class="two-cols">
@@ -166,13 +181,14 @@
         </div>
       </div>
 
+      <!-- 日期（只在「非熱門榜模式」時才會真的用來篩選） -->
       <div class="two-cols">
         <div>
-          <label for="startDate">開始日期（含）</label>
+          <label for="startDate">開始日期（含，非熱門榜模式才有用）</label>
           <input id="startDate" type="date" />
         </div>
         <div>
-          <label for="endDate">結束日期（含）</label>
+          <label for="endDate">結束日期（含，非熱門榜模式才有用）</label>
           <input id="endDate" type="date" />
         </div>
       </div>
@@ -200,7 +216,7 @@
       <div class="btn-row" style="display:flex; flex-direction:column; gap:8px;">
         <button id="searchBtn" type="button">依上方條件搜尋</button>
         <button id="weeklyShortsBtn" type="button">
-          本週 Shorts Top 50（可有關鍵字，也可留空）
+          （非熱門榜模式）本週 Shorts Top 50
         </button>
       </div>
       <div id="status"></div>
@@ -220,6 +236,7 @@
   <script>
     const apiKeyInput = document.getElementById("apiKey");
     const queryInput = document.getElementById("query");
+    const useTrendingModeCheckbox = document.getElementById("useTrendingMode");
     const regionSelect = document.getElementById("region");
     const categorySelect = document.getElementById("category");
     const startDateInput = document.getElementById("startDate");
@@ -232,6 +249,14 @@
     const weeklyShortsBtn = document.getElementById("weeklyShortsBtn");
     const statusDiv = document.getElementById("status");
     const resultsDiv = document.getElementById("results");
+
+    // 預設「貓狗」關鍵字（關鍵字留空時用）
+    const defaultCatDogKeywords = [
+      "cat","cats","kitty","kitten",
+      "dog","dogs","puppy",
+      "貓","貓咪","小貓","橘貓","虎斑貓","黑貓","白貓",
+      "狗","狗狗","小狗","柴犬","柯基","黃金獵犬","哈士奇"
+    ];
 
     (function loadApiKeyFromStorage() {
       const savedKey = localStorage.getItem("yt_api_key");
@@ -260,29 +285,34 @@
     searchBtn.addEventListener("click", async () => {
       const apiKey = apiKeyInput.value.trim();
       const query = queryInput.value.trim();
-      const startDate = startDateInput.value; // 關鍵字空白時僅顯示，不用來篩選
+      const startDate = startDateInput.value;
       const endDate = endDateInput.value;
       const limit = parseInt(limitInput.value, 10) || 10;
       const lengthMode = lengthModeSelect.value;
       const maxSeconds = parseInt(maxSecondsInput.value, 10) || null;
       const regionCode = regionSelect.value;
       const categoryId = categorySelect.value || null;
+      const useTrendingMode = useTrendingModeCheckbox.checked;
 
       if (!apiKey) {
         alert("請先填入 YouTube API Key");
         return;
       }
-      // 有關鍵字時才強制要求日期；無關鍵字則可以沒有日期
-      if (query && (!startDate || !endDate)) {
-        alert("使用關鍵字搜尋時，請選擇開始與結束日期");
-        return;
+      if (!useTrendingMode) {
+        // 非熱門榜模式才需要日期
+        if (!startDate || !endDate) {
+          alert("在「關鍵字 + 時間模式」下，請選擇開始與結束日期");
+          return;
+        }
       }
       if (lengthMode === "custom" && (!maxSeconds || maxSeconds <= 0)) {
         alert("請輸入有效的自訂長度上限（秒）");
         return;
       }
 
-      statusDiv.textContent = "搜尋中，請稍候……";
+      statusDiv.textContent = useTrendingMode
+        ? "使用熱門榜模式搜尋中，請稍候……"
+        : "使用關鍵字 + 時間模式搜尋中，請稍候……";
       resultsDiv.innerHTML = "";
 
       try {
@@ -295,7 +325,8 @@
           lengthMode,
           maxSeconds,
           regionCode,
-          categoryId
+          categoryId,
+          useTrendingMode
         });
 
         if (!videos.length) {
@@ -311,6 +342,7 @@
       }
     });
 
+    // 本週 Shorts Top 50：強制切到「關鍵字 + 時間模式」
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
       if (!apiKey) {
@@ -332,11 +364,38 @@
       lengthModeSelect.value = "shorts";
       lengthModeSelect.dispatchEvent(new Event("change"));
 
-      statusDiv.textContent = `搜尋中：本週 Shorts Top 50…（若關鍵字留空，實際依熱門榜為主）`;
+      // 關閉熱門榜模式，改用時間區間搜尋
+      useTrendingModeCheckbox.checked = false;
+
+      statusDiv.textContent = `（關鍵字 + 時間模式）搜尋本週 Shorts Top 50 中……`;
       resultsDiv.innerHTML = "";
 
       searchBtn.click();
     });
+
+    // 組 keyword list：有輸入就用輸入的詞；沒輸入就用預設貓狗關鍵字
+    function buildKeywords(query) {
+      if (query && query.trim()) {
+        return query
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((s) => s.toLowerCase());
+      }
+      return defaultCatDogKeywords.map((s) => s.toLowerCase());
+    }
+
+    function matchesKeywords(snippet, query) {
+      if (!snippet) return false;
+      const parts = [];
+      if (snippet.title) parts.push(snippet.title);
+      if (snippet.description) parts.push(snippet.description);
+      if (Array.isArray(snippet.tags)) parts.push(snippet.tags.join(" "));
+      const text = parts.join(" ").toLowerCase();
+      const kws = buildKeywords(query);
+      if (!kws.length) return true;
+      return kws.some((kw) => text.includes(kw));
+    }
 
     async function searchTopVideos(options) {
       const {
@@ -348,26 +407,30 @@
         lengthMode,
         maxSeconds,
         regionCode,
-        categoryId
+        categoryId,
+        useTrendingMode
       } = options;
 
       const searchBase = "https://www.googleapis.com/youtube/v3/search";
       const videosBase = "https://www.googleapis.com/youtube/v3/videos";
 
-      // 若有日期，轉成 ISO；若沒有（關鍵字空白時可以不填），就不使用
+      // 若有日期，才轉成 ISO；熱門榜模式不使用日期篩選
       let publishedAfter = null;
       let publishedBefore = null;
-      if (startDate && endDate) {
-        const publishedAfterDate = new Date(startDate + "T00:00:00Z");
-        const publishedBeforeDate = new Date(endDate + "T23:59:59Z");
+      let publishedAfterDate = null;
+      let publishedBeforeDate = null;
+
+      if (!useTrendingMode && startDate && endDate) {
+        publishedAfterDate = new Date(startDate + "T00:00:00Z");
+        publishedBeforeDate = new Date(endDate + "T23:59:59Z");
         publishedAfter = publishedAfterDate.toISOString();
         publishedBefore = publishedBeforeDate.toISOString();
       }
 
-      // ========== 情況一：關鍵字為空 → 直接抓熱門榜 mostPopular ==========
-      if (!query || query.length === 0) {
-        const maxPages = 3;   // 最多抓 3 頁
-        const perPage = 50;   // 每頁 50
+      // ========== 模式一：熱門榜模式（mostPopular）==========
+      if (useTrendingMode) {
+        const maxPages = 3;
+        const perPage = 50;
         let pageToken = null;
         let pageCount = 0;
         let allItems = [];
@@ -402,7 +465,12 @@
           if (allItems.length >= 200) break; // 安全上限
         }
 
-        let videoData = allItems.map((item) => {
+        // 先用「關鍵字 / 預設貓狗字」做本地篩選
+        let filteredItems = allItems.filter((item) =>
+          matchesKeywords(item.snippet, query)
+        );
+
+        let videoData = filteredItems.map((item) => {
           const stats = item.statistics || {};
           const snippet = item.snippet || {};
           const contentDetails = item.contentDetails || {};
@@ -421,7 +489,7 @@
           };
         });
 
-        // 只根據「長度」篩選（不再根據日期），確保能抓到目前熱門爆量短片
+        // 再用長度條件
         if (lengthMode === "shorts") {
           videoData = videoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -436,15 +504,15 @@
         return videoData.slice(0, limit);
       }
 
-      // ========== 情況二：有關鍵字 → search.list + 日期 ==========
+      // ========== 模式二：關鍵字 + 時間模式 ==========
 
+      // 若關鍵字為空，在這個模式下就「不帶 q」，單純看時間區間 + 排行
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
         type: "video",
         maxResults: "50",
-        order: "viewCount",
-        q: query
+        order: "viewCount"
       });
 
       if (publishedAfter) params.set("publishedAfter", publishedAfter);
@@ -452,6 +520,7 @@
       if (regionCode) params.set("regionCode", regionCode);
       if (categoryId) params.set("videoCategoryId", categoryId);
       if (lengthMode === "shorts") params.set("videoDuration", "short");
+      if (query && query.trim()) params.set("q", query);
 
       const searchUrl = `${searchBase}?${params.toString()}`;
       const searchRes = await fetch(searchUrl);
@@ -501,6 +570,7 @@
         };
       });
 
+      // 長度條件
       if (lengthMode === "shorts") {
         videoData = videoData.filter(
           (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -510,6 +580,12 @@
           (v) => v.durationSeconds != null && v.durationSeconds <= maxSeconds
         );
       }
+
+      // 若你希望在這個模式下也只看貓狗，可以在這裡再套一次 matchesKeywords()
+      // 例如：
+      // videoData = videoData.filter((v, idx) =>
+      //   matchesKeywords(videosJson2.items[idx].snippet, query)
+      // );
 
       videoData.sort((a, b) => b.views - a.views);
       return videoData.slice(0, limit);
