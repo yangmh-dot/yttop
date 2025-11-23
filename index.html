@@ -113,7 +113,8 @@
         1. 在 Google Cloud 建立 YouTube Data API v3 的 API Key。<br>
         2. 填入下面的 API Key（只會在你自己的瀏覽器使用）。<br>
         3. 可自訂條件搜尋，或使用「本週 Shorts Top 50」快捷鍵。<br>
-        4. 關鍵字可以留空，只用地區 + 類別 + 時間來抓熱門影片。
+        4. 關鍵字可以留空，此時會以 YouTube 熱門影片榜（mostPopular）為主，<br>
+           日期只做顯示用，不參與篩選。
       </div>
 
       <label for="apiKey">YouTube API Key</label>
@@ -259,7 +260,7 @@
     searchBtn.addEventListener("click", async () => {
       const apiKey = apiKeyInput.value.trim();
       const query = queryInput.value.trim();
-      const startDate = startDateInput.value;
+      const startDate = startDateInput.value; // 關鍵字空白時僅顯示，不用來篩選
       const endDate = endDateInput.value;
       const limit = parseInt(limitInput.value, 10) || 10;
       const lengthMode = lengthModeSelect.value;
@@ -271,8 +272,9 @@
         alert("請先填入 YouTube API Key");
         return;
       }
-      if (!startDate || !endDate) {
-        alert("請選擇開始日期與結束日期");
+      // 有關鍵字時才強制要求日期；無關鍵字則可以沒有日期
+      if (query && (!startDate || !endDate)) {
+        alert("使用關鍵字搜尋時，請選擇開始與結束日期");
         return;
       }
       if (lengthMode === "custom" && (!maxSeconds || maxSeconds <= 0)) {
@@ -330,7 +332,7 @@
       lengthModeSelect.value = "shorts";
       lengthModeSelect.dispatchEvent(new Event("change"));
 
-      statusDiv.textContent = `搜尋中：本週（${startDate} ~ ${endDate}）Shorts Top 50…`;
+      statusDiv.textContent = `搜尋中：本週 Shorts Top 50…（若關鍵字留空，實際依熱門榜為主）`;
       resultsDiv.innerHTML = "";
 
       searchBtn.click();
@@ -352,15 +354,20 @@
       const searchBase = "https://www.googleapis.com/youtube/v3/search";
       const videosBase = "https://www.googleapis.com/youtube/v3/videos";
 
-      const publishedAfterDate = new Date(startDate + "T00:00:00Z");
-      const publishedBeforeDate = new Date(endDate + "T23:59:59Z");
-      const publishedAfter = publishedAfterDate.toISOString();
-      const publishedBefore = publishedBeforeDate.toISOString();
+      // 若有日期，轉成 ISO；若沒有（關鍵字空白時可以不填），就不使用
+      let publishedAfter = null;
+      let publishedBefore = null;
+      if (startDate && endDate) {
+        const publishedAfterDate = new Date(startDate + "T00:00:00Z");
+        const publishedBeforeDate = new Date(endDate + "T23:59:59Z");
+        publishedAfter = publishedAfterDate.toISOString();
+        publishedBefore = publishedBeforeDate.toISOString();
+      }
 
-      // ========== 情況一：關鍵字為空 → videos.list + 多頁 mostPopular ==========
+      // ========== 情況一：關鍵字為空 → 直接抓熱門榜 mostPopular ==========
       if (!query || query.length === 0) {
-        const maxPages = 3;      // 最多抓 3 頁
-        const perPage = 50;      // 每頁 50
+        const maxPages = 3;   // 最多抓 3 頁
+        const perPage = 50;   // 每頁 50
         let pageToken = null;
         let pageCount = 0;
         let allItems = [];
@@ -391,7 +398,7 @@
           pageToken = videosJson.nextPageToken || null;
           pageCount += 1;
 
-          if (!pageToken) break;           // 沒下一頁就停
+          if (!pageToken) break;
           if (allItems.length >= 200) break; // 安全上限
         }
 
@@ -414,14 +421,7 @@
           };
         });
 
-        // 日期區間過濾
-        videoData = videoData.filter((v) => {
-          if (!v.publishedAt) return false;
-          const d = new Date(v.publishedAt);
-          return d >= publishedAfterDate && d <= publishedBeforeDate;
-        });
-
-        // 長度條件
+        // 只根據「長度」篩選（不再根據日期），確保能抓到目前熱門爆量短片
         if (lengthMode === "shorts") {
           videoData = videoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -436,18 +436,19 @@
         return videoData.slice(0, limit);
       }
 
-      // ========== 情況二：有關鍵字 → search.list ==========
+      // ========== 情況二：有關鍵字 → search.list + 日期 ==========
+
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
         type: "video",
         maxResults: "50",
         order: "viewCount",
-        publishedAfter,
-        publishedBefore,
         q: query
       });
 
+      if (publishedAfter) params.set("publishedAfter", publishedAfter);
+      if (publishedBefore) params.set("publishedBefore", publishedBefore);
       if (regionCode) params.set("regionCode", regionCode);
       if (categoryId) params.set("videoCategoryId", categoryId);
       if (lengthMode === "shorts") params.set("videoDuration", "short");
