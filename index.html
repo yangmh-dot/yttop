@@ -181,7 +181,7 @@
         </div>
       </div>
 
-      <!-- 日期（只在「非熱門榜模式」時真的用來篩選） -->
+      <!-- 日期（只在「非熱門榜模式」時用來篩選） -->
       <div class="two-cols">
         <div>
           <label for="startDate">開始日期（含，非熱門榜模式才有用）</label>
@@ -233,6 +233,10 @@
   </main>
 
   <script>
+    // ---- 共用常數 ----
+    const YT_SEARCH_BASE = "https://www.googleapis.com/youtube/v3/search";
+    const YT_VIDEOS_BASE = "https://www.googleapis.com/youtube/v3/videos";
+
     const apiKeyInput = document.getElementById("apiKey");
     const queryInput = document.getElementById("query");
     const useTrendingModeCheckbox = document.getElementById("useTrendingMode");
@@ -257,6 +261,7 @@
       "狗","狗狗","小狗","柴犬","柯基","黃金獵犬","哈士奇"
     ];
 
+    // 讀取/保存 API Key
     (function loadApiKeyFromStorage() {
       const savedKey = localStorage.getItem("yt_api_key");
       if (savedKey) apiKeyInput.value = savedKey;
@@ -266,6 +271,7 @@
       localStorage.setItem("yt_api_key", apiKeyInput.value.trim());
     });
 
+    // 自訂秒數顯示開關
     lengthModeSelect.addEventListener("change", () => {
       if (lengthModeSelect.value === "custom") {
         customSecondsWrapper.style.display = "block";
@@ -314,7 +320,7 @@
       resultsDiv.innerHTML = "";
 
       try {
-        const result = await searchTopVideos({
+        const videos = await searchTopVideos({
           apiKey,
           query,
           startDate,
@@ -327,22 +333,12 @@
           useTrendingMode
         });
 
-        const { videos, relaxedKeyword, relaxedLength } = result;
-
         if (!videos.length) {
           statusDiv.textContent = "找不到符合條件的影片。";
           return;
         }
 
-        let msg = `共取得 ${videos.length} 部影片（依觀看數由高到低）。`;
-        if (relaxedKeyword || relaxedLength) {
-          msg += "（已自動放寬條件：";
-          if (relaxedKeyword) msg += " 關鍵字";
-          if (relaxedLength) msg += relaxedKeyword ? "、長度" : " 長度";
-          msg += "）";
-        }
-        statusDiv.textContent = msg;
-
+        statusDiv.textContent = `共取得 ${videos.length} 部影片（依觀看數由高到低）。`;
         renderResults(videos);
       } catch (err) {
         console.error(err);
@@ -350,6 +346,7 @@
       }
     });
 
+    // 本週 Shorts Top 50（強制用關鍵字 + 時間模式）
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
       if (!apiKey) {
@@ -379,6 +376,7 @@
       searchBtn.click();
     });
 
+    // 關鍵字處理
     function buildKeywords(query) {
       if (query && query.trim()) {
         return query
@@ -402,6 +400,7 @@
       return kws.some((kw) => text.includes(kw));
     }
 
+    // 主搜尋函式
     async function searchTopVideos(options) {
       const {
         apiKey,
@@ -416,26 +415,18 @@
         useTrendingMode
       } = options;
 
-      const searchBase = "https://www.googleapis.com/youtube/v3/search";
-      const videosBase = "https://www.googleapis.com/youtube/v3/videos";
-
+      // 若有日期，才轉 ISO（只給「關鍵字 + 時間模式」用）
       let publishedAfter = null;
       let publishedBefore = null;
-      let publishedAfterDate = null;
-      let publishedBeforeDate = null;
 
       if (!useTrendingMode && startDate && endDate) {
-        publishedAfterDate = new Date(startDate + "T00:00:00Z");
-        publishedBeforeDate = new Date(endDate + "T23:59:59Z");
-        publishedAfter = publishedAfterDate.toISOString();
-        publishedBefore = publishedBeforeDate.toISOString();
+        const afterDate = new Date(startDate + "T00:00:00Z");
+        const beforeDate = new Date(endDate + "T23:59:59Z");
+        publishedAfter = afterDate.toISOString();
+        publishedBefore = beforeDate.toISOString();
       }
 
-      // flags for auto-relax
-      let relaxedKeyword = false;
-      let relaxedLength = false;
-
-      // ========== 模式一：熱門榜模式（mostPopular）==========
+      // ---------- 模式一：熱門榜模式 ----------
       if (useTrendingMode) {
         const maxPages = 3;
         const perPage = 50;
@@ -444,59 +435,51 @@
         let allItems = [];
 
         while (pageCount < maxPages) {
-          const videosParams = new URLSearchParams({
+          const params = new URLSearchParams({
             key: apiKey,
             part: "snippet,statistics,contentDetails",
             chart: "mostPopular",
             maxResults: String(perPage)
           });
 
-          if (regionCode) videosParams.set("regionCode", regionCode);
-          if (categoryId) videosParams.set("videoCategoryId", categoryId);
-          if (pageToken) videosParams.set("pageToken", pageToken);
+          if (regionCode) params.set("regionCode", regionCode);
+          if (categoryId) params.set("videoCategoryId", categoryId);
+          if (pageToken) params.set("pageToken", pageToken);
 
-          const videosUrl = `${videosBase}?${videosParams.toString()}`;
-          const videosRes = await fetch(videosUrl);
-          const videosJson = await videosRes.json();
+          const url = `${YT_VIDEOS_BASE}?${params.toString()}`;
+          const res = await fetch(url);
+          const json = await res.json();
 
-          if (!videosRes.ok) {
-            throw new Error(videosJson.error?.message || "YouTube videos API 錯誤（mostPopular）");
+          if (!res.ok) {
+            throw new Error(json.error?.message || "YouTube videos API 錯誤（mostPopular）");
           }
 
-          const items = videosJson.items || [];
+          const items = json.items || [];
           allItems = allItems.concat(items);
 
-          pageToken = videosJson.nextPageToken || null;
+          pageToken = json.nextPageToken || null;
           pageCount += 1;
-
           if (!pageToken) break;
           if (allItems.length >= 200) break;
         }
 
-        // 1st pass：用使用者輸入的關鍵字過濾
-        let filteredItems = allItems.filter((item) =>
+        // 第一步：先用使用者關鍵字 / 貓狗詞庫做篩選（兩段放寬）
+        let filtered = allItems.filter((item) =>
           matchesKeywords(item.snippet, query)
         );
 
-        // 若 0 筆 → 用預設貓狗詞庫再試一次
-        if (!filteredItems.length) {
-          filteredItems = allItems.filter((item) =>
+        if (!filtered.length) {
+          // 改用預設貓狗詞庫
+          filtered = allItems.filter((item) =>
             matchesKeywords(item.snippet, "")
           );
-          if (filteredItems.length) {
-            relaxedKeyword = true; // 關鍵字已放寬為預設貓狗
-          }
+        }
+        if (!filtered.length) {
+          // 仍 0 筆就不做關鍵字篩選
+          filtered = allItems;
         }
 
-        // 若還是 0 筆 → 不做關鍵字過濾，直接用全部熱門榜
-        if (!filteredItems.length) {
-          filteredItems = allItems;
-          if (query && query.trim()) {
-            relaxedKeyword = true;
-          }
-        }
-
-        const videoDataAll = filteredItems.map((item) => {
+        const allVideoData = filtered.map((item) => {
           const stats = item.statistics || {};
           const snippet = item.snippet || {};
           const contentDetails = item.contentDetails || {};
@@ -515,41 +498,38 @@
           };
         });
 
-        let videoData = videoDataAll;
+        let videoData = allVideoData;
 
-        // 先套使用者指定長度
+        // 先套使用者長度條件
         if (lengthMode === "shorts") {
-          videoData = videoDataAll.filter(
+          videoData = allVideoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= 60
           );
         } else if (lengthMode === "custom" && maxSeconds != null) {
-          videoData = videoDataAll.filter(
+          videoData = allVideoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= maxSeconds
           );
+          // 如果自訂秒數太嚴格 → 放寬到 60 秒
+          if (!videoData.length) {
+            videoData = allVideoData.filter(
+              (v) => v.durationSeconds != null && v.durationSeconds <= 60
+            );
+          }
         }
 
-        // 若自訂長度 0 筆 → 放寬成 ≤60 秒
-        if (!videoData.length && lengthMode === "custom") {
-          videoData = videoDataAll.filter(
-            (v) => v.durationSeconds != null && v.durationSeconds <= 60
-          );
-          if (videoData.length) relaxedLength = true;
-        }
-
-        // 若仍為 0 筆且原本有限制長度 → 直接忽略長度條件
+        // 若仍沒有資料且原本有限制長度 → 最後放寬成不限長度
         if (
           !videoData.length &&
           (lengthMode === "shorts" || lengthMode === "custom")
         ) {
-          videoData = videoDataAll;
-          relaxedLength = true;
+          videoData = allVideoData;
         }
 
         videoData.sort((a, b) => b.views - a.views);
-        return { videos: videoData.slice(0, limit), relaxedKeyword, relaxedLength };
+        return videoData.slice(0, limit);
       }
 
-      // ========== 模式二：關鍵字 + 時間模式 ==========
+      // ---------- 模式二：關鍵字 + 時間模式 ----------
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
@@ -565,8 +545,7 @@
       if (lengthMode === "shorts") params.set("videoDuration", "short");
       if (query && query.trim()) params.set("q", query);
 
-      const searchBase = "https://www.googleapis.com/youtube/v3/search";
-      const searchUrl = `${searchBase}?${params.toString()}`;
+      const searchUrl = `${YT_SEARCH_BASE}?${params.toString()}`;
       const searchRes = await fetch(searchUrl);
       const searchJson = await searchRes.json();
 
@@ -579,24 +558,23 @@
         .map((item) => item.id && item.id.videoId)
         .filter(Boolean);
 
-      if (!videoIds.length) return { videos: [], relaxedKeyword, relaxedLength };
+      if (!videoIds.length) return [];
 
-      const videosParams2 = new URLSearchParams({
+      const videosParams = new URLSearchParams({
         key: apiKey,
         part: "snippet,statistics,contentDetails",
         id: videoIds.join(",")
       });
 
-      const videosBase = "https://www.googleapis.com/youtube/v3/videos";
-      const videosUrl2 = `${videosBase}?${videosParams2.toString()}`;
-      const videosRes2 = await fetch(videosUrl2);
-      const videosJson2 = await videosRes2.json();
+      const videosUrl = `${YT_VIDEOS_BASE}?${videosParams.toString()}`;
+      const videosRes = await fetch(videosUrl);
+      const videosJson = await videosRes.json();
 
-      if (!videosRes2.ok) {
-        throw new Error(videosJson2.error?.message || "YouTube videos API 錯誤");
+      if (!videosRes.ok) {
+        throw new Error(videosJson.error?.message || "YouTube videos API 錯誤");
       }
 
-      let videoData = (videosJson2.items || []).map((item) => {
+      let videoData = (videosJson.items || []).map((item) => {
         const stats = item.statistics || {};
         const snippet = item.snippet || {};
         const contentDetails = item.contentDetails || {};
@@ -615,6 +593,7 @@
         };
       });
 
+      // 長度條件
       if (lengthMode === "shorts") {
         videoData = videoData.filter(
           (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -626,7 +605,7 @@
       }
 
       videoData.sort((a, b) => b.views - a.views);
-      return { videos: videoData.slice(0, limit), relaxedKeyword, relaxedLength };
+      return videoData.slice(0, limit);
     }
 
     function renderResults(videos) {
