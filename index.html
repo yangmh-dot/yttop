@@ -120,22 +120,22 @@
 
     <div class="card">
       <div class="small-note" style="margin-bottom:8px;">
-        用途說明：<br>
-        ・「熱門榜模式」：以 YouTube 熱門榜（mostPopular）為基礎，<b>模仿目前這一刻爆量的短片</b>。<br>
+        用途：<br>
+        ・「熱門榜模式」：以 YouTube 熱門榜（mostPopular）為基礎，模仿目前這一刻爆量的短片。<br>
         ・「關鍵字 + 時間模式」：指定日期區間 + 關鍵字，分析某段時間內播放數最高的影片。<br>
-        ・關鍵字留空且使用熱門榜模式時，會自動用「貓 / 狗」相關詞去抓貓狗影片。
+        ・熱門榜模式下，關鍵字留空會用「貓狗詞庫」自動抓貓狗主題影片。
       </div>
 
       <label for="apiKey">YouTube API Key</label>
       <input id="apiKey" type="password" placeholder="請貼上你的 API Key" />
 
-      <label for="query">關鍵字 / 類型（可留空；熱門榜模式時留空＝抓「貓狗」主題）</label>
+      <label for="query">關鍵字 / 類型（可留空；熱門榜模式留空＝抓「貓狗」主題）</label>
       <input id="query" type="text" value="" />
 
       <!-- 模式切換 -->
       <label class="mode-label">
         <input id="useTrendingMode" type="checkbox" checked />
-        使用熱門榜模式（mostPopular）模仿目前爆量影片（會忽略日期，只用地區 / 類別 / 長度 + 關鍵字做篩選）
+        使用熱門榜模式（mostPopular）模仿目前爆量影片（忽略日期，只用地區 / 類別 / 長度 + 關鍵字做篩選）
       </label>
 
       <!-- 地區 + 類別 -->
@@ -181,7 +181,7 @@
         </div>
       </div>
 
-      <!-- 日期（只在「非熱門榜模式」時才會真的用來篩選） -->
+      <!-- 日期（只在「非熱門榜模式」時真的用來篩選） -->
       <div class="two-cols">
         <div>
           <label for="startDate">開始日期（含，非熱門榜模式才有用）</label>
@@ -228,8 +228,7 @@
     </div>
 
     <div class="small-note">
-      ※ 提醒：這是純前端工具，API Key 會在瀏覽器端使用，<br>
-      建議在 Google Cloud 中，把金鑰限制在你的 GitHub Pages 網域。
+      ※ 這是純前端工具，API Key 只在你的瀏覽器使用。建議在 Google Cloud 限制金鑰來源網域為你的 GitHub Pages。
     </div>
   </main>
 
@@ -299,7 +298,6 @@
         return;
       }
       if (!useTrendingMode) {
-        // 非熱門榜模式才需要日期
         if (!startDate || !endDate) {
           alert("在「關鍵字 + 時間模式」下，請選擇開始與結束日期");
           return;
@@ -316,7 +314,7 @@
       resultsDiv.innerHTML = "";
 
       try {
-        const videos = await searchTopVideos({
+        const result = await searchTopVideos({
           apiKey,
           query,
           startDate,
@@ -329,12 +327,22 @@
           useTrendingMode
         });
 
+        const { videos, relaxedKeyword, relaxedLength } = result;
+
         if (!videos.length) {
           statusDiv.textContent = "找不到符合條件的影片。";
           return;
         }
 
-        statusDiv.textContent = `共取得 ${videos.length} 部影片（依觀看數由高到低）。`;
+        let msg = `共取得 ${videos.length} 部影片（依觀看數由高到低）。`;
+        if (relaxedKeyword || relaxedLength) {
+          msg += "（已自動放寬條件：";
+          if (relaxedKeyword) msg += " 關鍵字";
+          if (relaxedLength) msg += relaxedKeyword ? "、長度" : " 長度";
+          msg += "）";
+        }
+        statusDiv.textContent = msg;
+
         renderResults(videos);
       } catch (err) {
         console.error(err);
@@ -342,7 +350,6 @@
       }
     });
 
-    // 本週 Shorts Top 50：強制切到「關鍵字 + 時間模式」
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
       if (!apiKey) {
@@ -364,16 +371,14 @@
       lengthModeSelect.value = "shorts";
       lengthModeSelect.dispatchEvent(new Event("change"));
 
-      // 關閉熱門榜模式，改用時間區間搜尋
       useTrendingModeCheckbox.checked = false;
 
-      statusDiv.textContent = `（關鍵字 + 時間模式）搜尋本週 Shorts Top 50 中……`;
+      statusDiv.textContent = "（關鍵字 + 時間模式）搜尋本週 Shorts Top 50 中……";
       resultsDiv.innerHTML = "";
 
       searchBtn.click();
     });
 
-    // 組 keyword list：有輸入就用輸入的詞；沒輸入就用預設貓狗關鍵字
     function buildKeywords(query) {
       if (query && query.trim()) {
         return query
@@ -414,7 +419,6 @@
       const searchBase = "https://www.googleapis.com/youtube/v3/search";
       const videosBase = "https://www.googleapis.com/youtube/v3/videos";
 
-      // 若有日期，才轉成 ISO；熱門榜模式不使用日期篩選
       let publishedAfter = null;
       let publishedBefore = null;
       let publishedAfterDate = null;
@@ -426,6 +430,10 @@
         publishedAfter = publishedAfterDate.toISOString();
         publishedBefore = publishedBeforeDate.toISOString();
       }
+
+      // flags for auto-relax
+      let relaxedKeyword = false;
+      let relaxedLength = false;
 
       // ========== 模式一：熱門榜模式（mostPopular）==========
       if (useTrendingMode) {
@@ -462,15 +470,33 @@
           pageCount += 1;
 
           if (!pageToken) break;
-          if (allItems.length >= 200) break; // 安全上限
+          if (allItems.length >= 200) break;
         }
 
-        // 先用「關鍵字 / 預設貓狗字」做本地篩選
+        // 1st pass：用使用者輸入的關鍵字過濾
         let filteredItems = allItems.filter((item) =>
           matchesKeywords(item.snippet, query)
         );
 
-        let videoData = filteredItems.map((item) => {
+        // 若 0 筆 → 用預設貓狗詞庫再試一次
+        if (!filteredItems.length) {
+          filteredItems = allItems.filter((item) =>
+            matchesKeywords(item.snippet, "")
+          );
+          if (filteredItems.length) {
+            relaxedKeyword = true; // 關鍵字已放寬為預設貓狗
+          }
+        }
+
+        // 若還是 0 筆 → 不做關鍵字過濾，直接用全部熱門榜
+        if (!filteredItems.length) {
+          filteredItems = allItems;
+          if (query && query.trim()) {
+            relaxedKeyword = true;
+          }
+        }
+
+        const videoDataAll = filteredItems.map((item) => {
           const stats = item.statistics || {};
           const snippet = item.snippet || {};
           const contentDetails = item.contentDetails || {};
@@ -489,24 +515,41 @@
           };
         });
 
-        // 再用長度條件
+        let videoData = videoDataAll;
+
+        // 先套使用者指定長度
         if (lengthMode === "shorts") {
-          videoData = videoData.filter(
+          videoData = videoDataAll.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= 60
           );
         } else if (lengthMode === "custom" && maxSeconds != null) {
-          videoData = videoData.filter(
+          videoData = videoDataAll.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= maxSeconds
           );
         }
 
+        // 若自訂長度 0 筆 → 放寬成 ≤60 秒
+        if (!videoData.length && lengthMode === "custom") {
+          videoData = videoDataAll.filter(
+            (v) => v.durationSeconds != null && v.durationSeconds <= 60
+          );
+          if (videoData.length) relaxedLength = true;
+        }
+
+        // 若仍為 0 筆且原本有限制長度 → 直接忽略長度條件
+        if (
+          !videoData.length &&
+          (lengthMode === "shorts" || lengthMode === "custom")
+        ) {
+          videoData = videoDataAll;
+          relaxedLength = true;
+        }
+
         videoData.sort((a, b) => b.views - a.views);
-        return videoData.slice(0, limit);
+        return { videos: videoData.slice(0, limit), relaxedKeyword, relaxedLength };
       }
 
       // ========== 模式二：關鍵字 + 時間模式 ==========
-
-      // 若關鍵字為空，在這個模式下就「不帶 q」，單純看時間區間 + 排行
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
@@ -522,6 +565,7 @@
       if (lengthMode === "shorts") params.set("videoDuration", "short");
       if (query && query.trim()) params.set("q", query);
 
+      const searchBase = "https://www.googleapis.com/youtube/v3/search";
       const searchUrl = `${searchBase}?${params.toString()}`;
       const searchRes = await fetch(searchUrl);
       const searchJson = await searchRes.json();
@@ -535,7 +579,7 @@
         .map((item) => item.id && item.id.videoId)
         .filter(Boolean);
 
-      if (!videoIds.length) return [];
+      if (!videoIds.length) return { videos: [], relaxedKeyword, relaxedLength };
 
       const videosParams2 = new URLSearchParams({
         key: apiKey,
@@ -543,6 +587,7 @@
         id: videoIds.join(",")
       });
 
+      const videosBase = "https://www.googleapis.com/youtube/v3/videos";
       const videosUrl2 = `${videosBase}?${videosParams2.toString()}`;
       const videosRes2 = await fetch(videosUrl2);
       const videosJson2 = await videosRes2.json();
@@ -570,7 +615,6 @@
         };
       });
 
-      // 長度條件
       if (lengthMode === "shorts") {
         videoData = videoData.filter(
           (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -581,14 +625,8 @@
         );
       }
 
-      // 若你希望在這個模式下也只看貓狗，可以在這裡再套一次 matchesKeywords()
-      // 例如：
-      // videoData = videoData.filter((v, idx) =>
-      //   matchesKeywords(videosJson2.items[idx].snippet, query)
-      // );
-
       videoData.sort((a, b) => b.views - a.views);
-      return videoData.slice(0, limit);
+      return { videos: videoData.slice(0, limit), relaxedKeyword, relaxedLength };
     }
 
     function renderResults(videos) {
