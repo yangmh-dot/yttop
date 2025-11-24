@@ -123,7 +123,8 @@
         用途：<br>
         ・「熱門榜模式」：以 YouTube 熱門榜（mostPopular）為基礎，模仿目前這一刻爆量的短片。<br>
         ・「關鍵字 + 時間模式」：指定日期區間 + 關鍵字，分析某段時間內播放數最高的影片。<br>
-        ・熱門榜模式下，關鍵字留空會用「貓狗詞庫」自動抓貓狗主題影片。
+        ・熱門榜模式下，關鍵字留空會用「貓狗詞庫」自動抓貓狗主題影片。<br>
+        ・長度條件為絕對限制，若沒符合就會顯示 0 筆，不會自動放寬。
       </div>
 
       <label for="apiKey">YouTube API Key</label>
@@ -233,7 +234,6 @@
   </main>
 
   <script>
-    // ---- 共用常數 ----
     const YT_SEARCH_BASE = "https://www.googleapis.com/youtube/v3/search";
     const YT_VIDEOS_BASE = "https://www.googleapis.com/youtube/v3/videos";
 
@@ -253,7 +253,7 @@
     const statusDiv = document.getElementById("status");
     const resultsDiv = document.getElementById("results");
 
-    // 預設「貓狗」關鍵字（關鍵字留空時用）
+    // 預設「貓狗」關鍵字（熱門榜模式關鍵字留空時使用）
     const defaultCatDogKeywords = [
       "cat","cats","kitty","kitten",
       "dog","dogs","puppy",
@@ -261,7 +261,6 @@
       "狗","狗狗","小狗","柴犬","柯基","黃金獵犬","哈士奇"
     ];
 
-    // 讀取/保存 API Key
     (function loadApiKeyFromStorage() {
       const savedKey = localStorage.getItem("yt_api_key");
       if (savedKey) apiKeyInput.value = savedKey;
@@ -271,7 +270,6 @@
       localStorage.setItem("yt_api_key", apiKeyInput.value.trim());
     });
 
-    // 自訂秒數顯示開關
     lengthModeSelect.addEventListener("change", () => {
       if (lengthModeSelect.value === "custom") {
         customSecondsWrapper.style.display = "block";
@@ -334,7 +332,7 @@
         });
 
         if (!videos.length) {
-          statusDiv.textContent = "找不到符合條件的影片。";
+          statusDiv.textContent = "找不到符合條件的影片（請放寬關鍵字或長度條件）。";
           return;
         }
 
@@ -346,7 +344,7 @@
       }
     });
 
-    // 本週 Shorts Top 50（強制用關鍵字 + 時間模式）
+    // 本週 Shorts Top 50（強制用關鍵字+時間模式）
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
       if (!apiKey) {
@@ -376,7 +374,6 @@
       searchBtn.click();
     });
 
-    // 關鍵字處理
     function buildKeywords(query) {
       if (query && query.trim()) {
         return query
@@ -388,19 +385,17 @@
       return defaultCatDogKeywords.map((s) => s.toLowerCase());
     }
 
-    function matchesKeywords(snippet, query) {
+    function matchesKeywords(snippet, keywords) {
       if (!snippet) return false;
       const parts = [];
       if (snippet.title) parts.push(snippet.title);
       if (snippet.description) parts.push(snippet.description);
       if (Array.isArray(snippet.tags)) parts.push(snippet.tags.join(" "));
       const text = parts.join(" ").toLowerCase();
-      const kws = buildKeywords(query);
-      if (!kws.length) return true;
-      return kws.some((kw) => text.includes(kw));
+      if (!keywords.length) return true;
+      return keywords.some((kw) => text.includes(kw));
     }
 
-    // 主搜尋函式
     async function searchTopVideos(options) {
       const {
         apiKey,
@@ -414,17 +409,6 @@
         categoryId,
         useTrendingMode
       } = options;
-
-      // 若有日期，才轉 ISO（只給「關鍵字 + 時間模式」用）
-      let publishedAfter = null;
-      let publishedBefore = null;
-
-      if (!useTrendingMode && startDate && endDate) {
-        const afterDate = new Date(startDate + "T00:00:00Z");
-        const beforeDate = new Date(endDate + "T23:59:59Z");
-        publishedAfter = afterDate.toISOString();
-        publishedBefore = beforeDate.toISOString();
-      }
 
       // ---------- 模式一：熱門榜模式 ----------
       if (useTrendingMode) {
@@ -454,32 +438,25 @@
             throw new Error(json.error?.message || "YouTube videos API 錯誤（mostPopular）");
           }
 
-          const items = json.items || [];
-          allItems = allItems.concat(items);
-
+          allItems = allItems.concat(json.items || []);
           pageToken = json.nextPageToken || null;
           pageCount += 1;
+
           if (!pageToken) break;
           if (allItems.length >= 200) break;
         }
 
-        // 第一步：先用使用者關鍵字 / 貓狗詞庫做篩選（兩段放寬）
-        let filtered = allItems.filter((item) =>
-          matchesKeywords(item.snippet, query)
+        // 關鍵字：有輸入用輸入的；沒輸入用預設貓狗詞庫
+        const keywordList = buildKeywords(query);
+        const filteredByKeyword = allItems.filter((item) =>
+          matchesKeywords(item.snippet, keywordList)
         );
 
-        if (!filtered.length) {
-          // 改用預設貓狗詞庫
-          filtered = allItems.filter((item) =>
-            matchesKeywords(item.snippet, "")
-          );
-        }
-        if (!filtered.length) {
-          // 仍 0 筆就不做關鍵字篩選
-          filtered = allItems;
-        }
+        const baseItems = filteredByKeyword.length ? filteredByKeyword : [];
 
-        const allVideoData = filtered.map((item) => {
+        if (!baseItems.length) return [];
+
+        let videoData = baseItems.map((item) => {
           const stats = item.statistics || {};
           const snippet = item.snippet || {};
           const contentDetails = item.contentDetails || {};
@@ -498,31 +475,15 @@
           };
         });
 
-        let videoData = allVideoData;
-
-        // 先套使用者長度條件
+        // 絕對長度限制
         if (lengthMode === "shorts") {
-          videoData = allVideoData.filter(
+          videoData = videoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= 60
           );
         } else if (lengthMode === "custom" && maxSeconds != null) {
-          videoData = allVideoData.filter(
+          videoData = videoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= maxSeconds
           );
-          // 如果自訂秒數太嚴格 → 放寬到 60 秒
-          if (!videoData.length) {
-            videoData = allVideoData.filter(
-              (v) => v.durationSeconds != null && v.durationSeconds <= 60
-            );
-          }
-        }
-
-        // 若仍沒有資料且原本有限制長度 → 最後放寬成不限長度
-        if (
-          !videoData.length &&
-          (lengthMode === "shorts" || lengthMode === "custom")
-        ) {
-          videoData = allVideoData;
         }
 
         videoData.sort((a, b) => b.views - a.views);
@@ -530,6 +491,16 @@
       }
 
       // ---------- 模式二：關鍵字 + 時間模式 ----------
+      let publishedAfter = null;
+      let publishedBefore = null;
+
+      if (startDate && endDate) {
+        const afterDate = new Date(startDate + "T00:00:00Z");
+        const beforeDate = new Date(endDate + "T23:59:59Z");
+        publishedAfter = afterDate.toISOString();
+        publishedBefore = beforeDate.toISOString();
+      }
+
       const params = new URLSearchParams({
         key: apiKey,
         part: "id",
@@ -593,7 +564,6 @@
         };
       });
 
-      // 長度條件
       if (lengthMode === "shorts") {
         videoData = videoData.filter(
           (v) => v.durationSeconds != null && v.durationSeconds <= 60
