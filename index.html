@@ -123,14 +123,14 @@
         用途：<br>
         ・「熱門榜模式」：以 YouTube 熱門榜（mostPopular）為基礎，模仿目前這一刻爆量的短片。<br>
         ・「關鍵字 + 時間模式」：指定日期區間 + 關鍵字，分析某段時間內播放數最高的影片。<br>
-        ・熱門榜模式下，關鍵字留空會用「貓狗詞庫」自動抓貓狗主題影片。<br>
+        ・熱門榜模式下：關鍵字留空＝不做主題過濾；要抓貓狗請在關鍵字輸入 cat / dog / 貓 / 狗 等。<br>
         ・長度條件為絕對限制，若沒符合就會顯示 0 筆，不會自動放寬。
       </div>
 
       <label for="apiKey">YouTube API Key</label>
       <input id="apiKey" type="password" placeholder="請貼上你的 API Key" />
 
-      <label for="query">關鍵字 / 類型（可留空；熱門榜模式留空＝抓「貓狗」主題）</label>
+      <label for="query">關鍵字 / 類型（可留空）</label>
       <input id="query" type="text" value="" />
 
       <!-- 模式切換 -->
@@ -253,14 +253,7 @@
     const statusDiv = document.getElementById("status");
     const resultsDiv = document.getElementById("results");
 
-    // 預設「貓狗」關鍵字（熱門榜模式關鍵字留空時使用）
-    const defaultCatDogKeywords = [
-      "cat","cats","kitty","kitten",
-      "dog","dogs","puppy",
-      "貓","貓咪","小貓","橘貓","虎斑貓","黑貓","白貓",
-      "狗","狗狗","小狗","柴犬","柯基","黃金獵犬","哈士奇"
-    ];
-
+    // 讀取/保存 API Key
     (function loadApiKeyFromStorage() {
       const savedKey = localStorage.getItem("yt_api_key");
       if (savedKey) apiKeyInput.value = savedKey;
@@ -270,6 +263,7 @@
       localStorage.setItem("yt_api_key", apiKeyInput.value.trim());
     });
 
+    // 自訂秒數顯示開關
     lengthModeSelect.addEventListener("change", () => {
       if (lengthModeSelect.value === "custom") {
         customSecondsWrapper.style.display = "block";
@@ -375,24 +369,22 @@
     });
 
     function buildKeywords(query) {
-      if (query && query.trim()) {
-        return query
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .map((s) => s.toLowerCase());
-      }
-      return defaultCatDogKeywords.map((s) => s.toLowerCase());
+      if (!query || !query.trim()) return [];
+      return query
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((s) => s.toLowerCase());
     }
 
     function matchesKeywords(snippet, keywords) {
+      if (!keywords.length) return true;  // 沒有關鍵字 = 不過濾
       if (!snippet) return false;
       const parts = [];
       if (snippet.title) parts.push(snippet.title);
       if (snippet.description) parts.push(snippet.description);
       if (Array.isArray(snippet.tags)) parts.push(snippet.tags.join(" "));
       const text = parts.join(" ").toLowerCase();
-      if (!keywords.length) return true;
       return keywords.some((kw) => text.includes(kw));
     }
 
@@ -446,15 +438,16 @@
           if (allItems.length >= 200) break;
         }
 
-        // 關鍵字：有輸入用輸入的；沒輸入用預設貓狗詞庫
         const keywordList = buildKeywords(query);
-        const filteredByKeyword = allItems.filter((item) =>
-          matchesKeywords(item.snippet, keywordList)
-        );
+        let baseItems = allItems;
 
-        const baseItems = filteredByKeyword.length ? filteredByKeyword : [];
-
-        if (!baseItems.length) return [];
+        // 有填關鍵字才做主題過濾；沒填就直接用整個熱門榜
+        if (keywordList.length) {
+          baseItems = allItems.filter((item) =>
+            matchesKeywords(item.snippet, keywordList)
+          );
+          if (!baseItems.length) return [];
+        }
 
         let videoData = baseItems.map((item) => {
           const stats = item.statistics || {};
