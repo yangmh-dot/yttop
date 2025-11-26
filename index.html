@@ -135,7 +135,7 @@
 
       <!-- 模式切換 -->
       <label class="mode-label">
-        <input id="useTrendingMode" type="checkbox" checked />
+        <input id="useTrendingMode" type="checkbox" />
         使用熱門榜模式（mostPopular）模仿目前爆量影片（忽略日期，只用地區 / 類別 / 長度 + 關鍵字做篩選）
       </label>
 
@@ -253,7 +253,6 @@
     const statusDiv = document.getElementById("status");
     const resultsDiv = document.getElementById("results");
 
-    // 讀取/保存 API Key
     (function loadApiKeyFromStorage() {
       const savedKey = localStorage.getItem("yt_api_key");
       if (savedKey) apiKeyInput.value = savedKey;
@@ -263,7 +262,6 @@
       localStorage.setItem("yt_api_key", apiKeyInput.value.trim());
     });
 
-    // 自訂秒數顯示開關
     lengthModeSelect.addEventListener("change", () => {
       if (lengthModeSelect.value === "custom") {
         customSecondsWrapper.style.display = "block";
@@ -338,7 +336,6 @@
       }
     });
 
-    // 本週 Shorts Top 50（強制用關鍵字+時間模式）
     weeklyShortsBtn.addEventListener("click", () => {
       const apiKey = apiKeyInput.value.trim();
       if (!apiKey) {
@@ -378,7 +375,7 @@
     }
 
     function matchesKeywords(snippet, keywords) {
-      if (!keywords.length) return true;  // 沒有關鍵字 = 不過濾
+      if (!keywords.length) return true;
       if (!snippet) return false;
       const parts = [];
       if (snippet.title) parts.push(snippet.title);
@@ -441,7 +438,6 @@
         const keywordList = buildKeywords(query);
         let baseItems = allItems;
 
-        // 有填關鍵字才做主題過濾；沒填就直接用整個熱門榜
         if (keywordList.length) {
           baseItems = allItems.filter((item) =>
             matchesKeywords(item.snippet, keywordList)
@@ -468,7 +464,6 @@
           };
         });
 
-        // 絕對長度限制
         if (lengthMode === "shorts") {
           videoData = videoData.filter(
             (v) => v.durationSeconds != null && v.durationSeconds <= 60
@@ -498,8 +493,7 @@
         key: apiKey,
         part: "id",
         type: "video",
-        maxResults: "50",
-        order: "viewCount"
+        maxResults: "50"
       });
 
       if (publishedAfter) params.set("publishedAfter", publishedAfter);
@@ -507,7 +501,16 @@
       if (regionCode) params.set("regionCode", regionCode);
       if (categoryId) params.set("videoCategoryId", categoryId);
       if (lengthMode === "shorts") params.set("videoDuration", "short");
-      if (query && query.trim()) params.set("q", query);
+
+      const keywordList = buildKeywords(query);
+      if (keywordList.length) {
+        // 有關鍵字：直接用 API 的 viewCount 排序
+        params.set("order", "viewCount");
+        params.set("q", query);
+      } else {
+        // 無關鍵字：用日期排序抓最新，再在前端以 views 排序
+        params.set("order", "date");
+      }
 
       const searchUrl = `${YT_SEARCH_BASE}?${params.toString()}`;
       const searchRes = await fetch(searchUrl);
@@ -567,6 +570,7 @@
         );
       }
 
+      // 這裡統一在前端用 views 排序
       videoData.sort((a, b) => b.views - a.views);
       return videoData.slice(0, limit);
     }
